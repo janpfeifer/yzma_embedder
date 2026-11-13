@@ -26,11 +26,14 @@ On first run, `yzma_embedder` automatically downloads prebuilt `llama.cpp` share
 
 ## Benchmark Results
 
-**Environment:**
+**Shared Workload:**
+- **Dataset & Model**: `-limit 1000` queries (**10,000 passages**, **773,300 non-padding tokens**, ~77.3 tokens/passage) after `-warmup` on `second-state/All-MiniLM-L6-v2-Embedding-GGUF` (`all-MiniLM-L6-v2-Q4_K_M.gguf`)
+- **`llama.cpp` / `yzma`**: `llama.cpp` `0.9.0-dev` (build `b12110`) via `yzma` `v1.32.0` (CPU backend, `-ngl=0`)
+
+### 1. AMD Ryzen 9 9950X3D (Linux `amd64`, 16 Cores / 32 Threads)
+
 - **CPU**: AMD Ryzen 9 9950X3D (16 physical cores / 32 threads, Zen 5, AVX-512 VNNI, 3D V-Cache)
 - **OS / Go**: Linux `amd64`, Go `1.27.3` (`GOEXPERIMENT=simd` for GoMLX)
-- **`llama.cpp` / `yzma`**: `llama.cpp` `0.9.0-dev` (build `b12110`) via `yzma` `v1.32.0` (CPU backend)
-- **Workload**: `-limit 1000` queries (**10,000 passages**, **773,300 non-padding tokens**, ~77.3 tokens/passage) after `-warmup` on `second-state/All-MiniLM-L6-v2-Embedding-GGUF` (`all-MiniLM-L6-v2-Q4_K_M.gguf`)
 
 | Engine & Configuration | Total Duration | Passages/s | Non-Pad Tokens/s | CPU Time / Passage | `~Cores` | Max RSS Mem |
 | :--- | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -42,14 +45,33 @@ On first run, `yzma_embedder` automatically downloads prebuilt `llama.cpp` share
 | `yzma` / `llama.cpp` (`-bucket=8192`, `4` embedders × `4` threads) | `14.8s` | `676 passages/s` | `52.3K tokens/s` | `20.4ms` | `13.8` | `360.5 MiB` |
 | `yzma` / `llama.cpp` (`-bucket=8192`, `1` embedder × `16` threads) | `22.4s` | `447 passages/s` | `34.6K tokens/s` | `25.5ms` | `11.4` | `220.1 MiB` |
 
-### Why `-bucket=0 -num_embedders=32` Excels on CPU, and Why GoMLX Is ~4.8× Faster
+### 2. Apple Mac mini M6 (macOS `arm64`, 12 Cores)
 
-1. **Unpadded Parallel Single-Sequence Execution (`-bucket=0 -num_embedders=32`)**:
-   - In **`llama.cpp` (`ggml`)**, multi-sequence batches have no separate `batchSize` axis — sequences in a `ubatch` of length $U = \sum_i \text{seqLen}_i$ are concatenated end-to-end and masked via a dense `[U, U]` attention matrix ($U^2$ instead of $\sum_i \text{seqLen}_i^2$). Running 1 unpadded sequence per worker across 32 independent single-threaded contexts eliminates both cross-sequence $O(U^2)$ attention and `ggml` threadpool barrier overhead, jumping from `34.6K` to **`76.3K tokens/s`**.
-   - In **GoMLX**, switching from bucketed single-embedder execution (`-bucket=8192 -num_embedders=1`, `152.3K tokens/s`) to unpadded dynamic `seq_len` across 32 embedders (`-bucket=0 -num_embedders=32`, **`364.7K tokens/s`**) eliminates all bucket-padding compute, removes intra-op worker synchronization (`OpsExecutionDynamic` runs each independent embedder sequentially on its own hardware thread), and keeps each passage's `[1, seqLen, 384]` activations hot inside that core's private L1/L2 cache (`6.5ms` CPU time/passage vs `11.4ms`).
-2. **2D Register-Tiled AVX-512 VNNI GEMM vs Row-by-Row Dot-Products**:
-   - In the exact same `-bucket=0 -num_embedders=32` configuration, each call processes a single passage of $M \approx 77$ token rows. `llama.cpp` unpacks `Q4_K` nibbles and 6-bit scales on-the-fly inside row-by-row `ggml_vec_dot_q4_K_q8_K` vector dots (`31.7ms` CPU/passage, `76.3K tokens/s`).
-   - GoMLX executes 2D register-tiled AVX-512 VNNI (`VPDPBUSD`) GEMMs across multiple sequence rows simultaneously with fused in-tile `Bias + GELU` epilogues — reaching **`222.5K tokens/s`** (`2.9×` faster) with streaming `2 MB` panel chunks (`GOMLX_BACKEND=go`), and **`364.7K tokens/s`** (**`4.8×` faster**, `6.5ms` CPU/passage) when constant GGUF weights are pre-packed once into shared L3-resident K4-interleaved `uint8` panels (`GOMLX_BACKEND=go:quantized_cache`).
+- **CPU**: Apple M6 (12 cores total: 2 Super, 4 Performance, 6 Efficiency; ARMv9.2-A with NEON `USDOT` / `I8MM` and SME2)
+- **OS / Go**: macOS `darwin/arm64`, Go `1.27.3` (`GOEXPERIMENT=simd` for GoMLX; activates NEON + SME2 kernels)
+
+| Engine & Configuration | Total Duration | Passages/s | Non-Pad Tokens/s | CPU Time / Passage | `~Cores` | Max RSS Mem |
+| :--- | ---: | ---: | ---: | ---: | ---: | ---: |
+| **GoMLX (`go:quantized_cache`, SIMD/NEON/SME2, `-bucket=0`, `12` embedders)** | **`9.0s`** | **`1,117 passages/s`** | **`86.4K tokens/s`** | **`10.6ms`** | `11.8` | `373.3 MiB` |
+| **GoMLX (`go` default, SIMD/NEON/SME2, `-bucket=0`, `12` embedders)** | **`10.5s`** | **`951 passages/s`** | **`73.6K tokens/s`** | **`12.4ms`** | `11.8` | `377.3 MiB` |
+| **GoMLX (`go:quantized_cache`, SIMD/NEON/SME2, `-bucket=8192`, `1` embedder)** | `12.2s` | `816 passages/s` | `63.2K tokens/s` | `14.0ms` | `11.4` | `418.4 MiB` |
+| **`yzma` / `llama.cpp` (`-bucket=0`, `12` embedders × `1` thread, all cores)** | **`12.9s`** | **`775 passages/s`** | **`60.0K tokens/s`** | `15.1ms` | `11.7` | `395.6 MiB` |
+| `yzma` / `llama.cpp` (`-bucket=8192`, `4` embedders × `3` threads) | `14.8s` | `675 passages/s` | `52.2K tokens/s` | `13.8ms` | `9.3` | `478.5 MiB` |
+| `yzma` / `llama.cpp` (`-bucket=0`, `6` embedders × `1` thread, Super + Perf cores) | `17.7s` | `565 passages/s` | `43.7K tokens/s` | `11.1ms` | `6.3` | `350.5 MiB` |
+| `yzma` / `llama.cpp` (`-bucket=8192`, `1` embedder × `6` threads, Super + Perf cores) | `26.5s` | `377 passages/s` | `29.1K tokens/s` | `10.9ms` | `4.1` | `275.3 MiB` |
+| `yzma` / `llama.cpp` (`-bucket=8192`, `1` embedder × `12` threads, all cores) | `28.4s` | `352 passages/s` | `27.2K tokens/s` | `19.5ms` | `6.8` | `292.3 MiB` |
+
+> **Note on Apple M6 3-tier core topology (`Super` / `Performance` / `Efficiency`) in `llama.cpp`:** On macOS, `llama.cpp`'s default thread detection queries `hw.perflevel0.physicalcpu` (which reports only the `2` Super cores on M6, ignoring the `4` Performance and `6` Efficiency cores). In single-sequence mode (`-bucket=0 -num_embedders=12`), each worker explicitly runs with `1` thread so all 12 cores are saturated (`~11.7` cores). In bucketed mode (`-bucket=8192`), pass `-threads=3` (for `-num_embedders=4`) or `-threads=6` / `-threads=12` (for `-num_embedders=1`) to use more than 2 threads.
+
+### Why `-bucket=0 -num_embedders=GOMAXPROCS` Excels on CPU, and Why GoMLX Is Faster
+
+1. **Unpadded Parallel Single-Sequence Execution (`-bucket=0 -num_embedders=GOMAXPROCS`)**:
+   - In **`llama.cpp` (`ggml`)**, multi-sequence batches have no separate `batchSize` axis — sequences in a `ubatch` of length $U = \sum_i \text{seqLen}_i$ are concatenated end-to-end and masked via a dense `[U, U]` attention matrix ($U^2$ instead of $\sum_i \text{seqLen}_i^2$). Running 1 unpadded sequence per worker across independent single-threaded contexts eliminates both cross-sequence $O(U^2)$ attention and `ggml` threadpool barrier overhead, jumping from `34.6K` to **`76.3K tokens/s`** on Ryzen 9950X3D (`32` embedders) and from `27.2K` to **`60.0K tokens/s`** on Apple M6 (`12` embedders).
+   - In **GoMLX**, switching from bucketed single-embedder execution (`-bucket=8192 -num_embedders=1`) to unpadded dynamic `seq_len` across `GOMAXPROCS` embedders (`-bucket=0`) eliminates all bucket-padding compute, removes intra-op worker synchronization (`OpsExecutionDynamic` runs each independent embedder sequentially on its own hardware thread), and keeps each passage's `[1, seqLen, 384]` activations hot inside that core's private L1/L2 cache — reaching **`364.7K tokens/s`** on Ryzen 9950X3D (`32` embedders) and **`86.4K tokens/s`** on Apple M6 (`12` embedders).
+2. **2D Register-Tiled Quantized GEMM (`AVX-512 VNNI` on `amd64`, Hybrid `SME2 + NEON USDOT` on `arm64`) vs Row-by-Row Dot-Products**:
+   - In the exact same `-bucket=0` configuration, each call processes a single passage of $M \approx 77$ token rows. `llama.cpp` unpacks `Q4_K` nibbles and 6-bit scales on-the-fly inside row-by-row `ggml_vec_dot_q4_K_q8_K` vector dots.
+   - On **`amd64` (Ryzen 9950X3D)**, GoMLX executes 2D register-tiled AVX-512 VNNI (`VPDPBUSD`) GEMMs across multiple sequence rows simultaneously with fused in-tile `Bias + GELU` epilogues — reaching **`222.5K tokens/s`** (`2.9×` faster) with streaming `2 MB` panel chunks (`GOMLX_BACKEND=go`), and **`364.7K tokens/s`** (**`4.8×` faster**, `6.5ms` CPU/passage) when constant GGUF weights are pre-packed once into shared L3-resident K4-interleaved `uint8` panels (`GOMLX_BACKEND=go:quantized_cache`).
+   - On **`arm64` (Apple M6)**, GoMLX combines per-cluster SME2 `SUMOPA` + `FMOPA` 16×16 outer-product matrix tiles with 3×16 NEON `USDOT` microkernels across the remaining cores and handwritten NEON `Q8_0`/`Q8_K` activation quantizers, `GELU`, and `LayerNorm` — reaching **`73.6K tokens/s`** (`1.23×` faster than `llama.cpp`) with `GOMLX_BACKEND=go`, and **`86.4K tokens/s`** (**`1.44×` faster**, `10.6ms` CPU/passage) with `GOMLX_BACKEND=go:quantized_cache`.
 
 ---
 
