@@ -20,15 +20,15 @@
 // github.com/gomlx/go-huggingface/examples/msmarco/benchmark_embed.
 //
 // Supports two execution modes controlled by -bucket:
-//   - -bucket > 0 (default 8192): token-budget bucketing (same Bucketizer as benchmark_embed),
-//     packing multiple unpadded sequences into llama.cpp micro-batches.
-//   - -bucket=0: unpadded single-sequence calls (one passage per llama.cpp call, no bucketing/padding),
+//   - -bucket <= 0 (default 0): unpadded single-sequence mode (bucket.Unpadded, one passage per llama.cpp call with no padding),
 //     defaulting -num_embedders to GOMAXPROCS with 1 thread per llama.cpp context.
+//   - -bucket > 0 (e.g. 8192): token-budget bucketing (bucket.ByTwoBitBucketBudget, same as benchmark_embed),
+//     packing multiple sequences into llama.cpp micro-batches.
 //
 // Usage:
 //
-//	# Single-sequence mode across GOMAXPROCS embedders:
-//	go run github.com/janpfeifer/yzma_embedder@latest --bucket=0 -model second-state/All-MiniLM-L6-v2-Embedding-GGUF -limit 1000 -warmup
+//	# Default single-sequence mode (-bucket=0, -num_embedders=GOMAXPROCS):
+//	go run github.com/janpfeifer/yzma_embedder@latest -model second-state/All-MiniLM-L6-v2-Embedding-GGUF -limit 1000 -warmup
 //
 //	# Bucketed mode:
 //	go run github.com/janpfeifer/yzma_embedder@latest -bucket=8192 -model second-state/All-MiniLM-L6-v2-Embedding-GGUF -limit 1000 -num_embedders=1 -warmup
@@ -76,10 +76,10 @@ var (
 			"When empty, selects by community preference order (Q4_K_M, Q4_K_S, ...).")
 	flagLimit        = flag.Int("limit", -1, "Limit the number of queries indexed. Set <= 0 to use all.")
 	flagMSMarcoSplit = flag.String("msmarco_split", msmarco.TrainSplit, "Split to read from MS MARCO dataset (e.g. 'train', 'validation', 'test')")
-	flagBucketBudget = flag.Int("bucket", 8*1024,
-		"Bucket budget in number of tokens (> 0 uses two-bit token-budget bucketing; 0 disables bucketing/packing and runs 1 unpadded sequence per llama.cpp call).")
-	flagParallelEmbedders = flag.Int("num_embedders", 0,
-		"Number of parallel llama.cpp embedder contexts (0 = auto: GOMAXPROCS when -bucket=0, 1 when -bucket > 0).")
+	flagBucketBudget = flag.Int("bucket", 0,
+		"Bucket budget in number of tokens (<= 0 uses bucket.Unpadded() to run 1 unpadded sequence per llama.cpp call; > 0 uses two-bit token-budget bucketing).")
+	flagParallelEmbedders = flag.Int("num_embedders", runtime.GOMAXPROCS(0),
+		"Number of parallel llama.cpp embedder contexts (defaults to GOMAXPROCS; <= 0 also uses GOMAXPROCS).")
 	flagProfile = flag.Bool("profile", false, "Enable pprof HTTP server on localhost:6060.")
 	flagCPUProf = flag.String("cpuprof", "", "Write CPU profile to file.")
 	flagWarmup  = flag.Bool("warmup", false, "Do a warmup run over the dataset first.")
@@ -501,8 +501,15 @@ func (w *llamaWorker) flushSubBatch(seqCount int) error {
 	return nil
 }
 
-// EmbedBucket embeds all non-padding sentences in bk (used when -bucket > 0).
+// EmbedBucket embeds all non-padding sentences in bk.
+// When w.singleSeq is true (unpadded mode, -bucket <= 0), bk contains a single
+// unpadded sentence and delegates directly to EmbedTokens.
 func (w *llamaWorker) EmbedBucket(bk *bucket.Bucket) (int64, error) {
+	if w.singleSeq {
+		n, err := w.EmbedTokens(bk.Batch[:bk.NonPadTokens])
+		return int64(n), err
+	}
+
 	batchSize := bk.Shape.BatchSize
 	seqLen := bk.Shape.SentenceLength
 
@@ -580,11 +587,7 @@ func main() {
 
 	numEmbedders := *flagParallelEmbedders
 	if numEmbedders <= 0 {
-		if *flagBucketBudget <= 0 {
-			numEmbedders = runtime.GOMAXPROCS(0)
-		} else {
-			numEmbedders = 1
-		}
+		numEmbedders = runtime.GOMAXPROCS(0)
 	}
 
 	fmt.Printf("- Model %q, bucket %d, parallel embedders %d, dynamic shapes %t, warmup %t, shapes %t\n",
@@ -656,6 +659,11 @@ func main() {
 	}()
 	fmt.Printf("- Backend: %s\n", workers[0].description())
 
+	unpadded := *flagBucketBudget <= 0
+	if unpadded {
+		fmt.Printf("- Unpadded single-sentence mode enabled (batchSize=1)\n")
+	}
+
 	// Dataset preparation and stats.
 	ds := datasets.New(msmarco.ID)
 	limit := *flagLimit
@@ -675,19 +683,11 @@ func main() {
 
 	if *flagWarmup {
 		fmt.Printf("\n--- Warmup Run ---\n")
-		if *flagBucketBudget <= 0 {
-			runSingleSeqBenchmark(workers, resolved.tokenizer, ds, limit, int(totalQueries), true)
-		} else {
-			runBucketBenchmark(workers, resolved.tokenizer, ds, limit, int(totalQueries), true)
-		}
+		runBenchmark(workers, resolved.tokenizer, ds, limit, int(totalQueries), unpadded, true)
 	}
 
 	fmt.Printf("\n--- Benchmark Run ---\n")
-	if *flagBucketBudget <= 0 {
-		runSingleSeqBenchmark(workers, resolved.tokenizer, ds, limit, int(totalQueries), false)
-	} else {
-		runBucketBenchmark(workers, resolved.tokenizer, ds, limit, int(totalQueries), false)
-	}
+	runBenchmark(workers, resolved.tokenizer, ds, limit, int(totalQueries), unpadded, false)
 }
 
 func exportReferenceEmbeddings(llamaModel llama.Model, resolved *resolvedModel, padID int, outPath string) {
@@ -731,175 +731,29 @@ type SpeedStats struct {
 	UniqueShapes             int
 }
 
-// runSingleSeqBenchmark streams MS MARCO passages without bucketing or padding (-bucket=0),
-// executing one sequence per llama.cpp call across len(workers) parallel contexts.
-func runSingleSeqBenchmark(workers []*llamaWorker, tokenizer tokenizers.Tokenizer, ds *datasets.Dataset, limit, totalQueries int, isWarmup bool) {
-	var wg sync.WaitGroup
-	passagesChan := make(chan string, len(workers)*8)
-
-	wg.Go(func() {
-		defer close(passagesChan)
-
-		var numQueriesRead int
-		for record, err := range datasets.IterParquetFromDatasetAt[msmarco.MsMarcoRecord](ds, msmarco.Config, *flagMSMarcoSplit, 0) {
-			if err != nil {
-				klog.Fatalf("Dataset iterator error: %v", err)
-			}
-			numQueriesRead++
-			for _, text := range record.Passages.PassageText {
-				if text == "" {
-					continue
-				}
-				passagesChan <- text
-			}
-			if limit > 0 && numQueriesRead >= limit {
-				break
-			}
+func countReferences(refs []bucket.Reference) int {
+	count := 0
+	for _, ref := range refs {
+		if ref != nil {
+			count++
 		}
-	})
-
-	startTime, startCPUTime := time.Now(), cpuTime()
-	var speedStats SpeedStats
-	speedStats.IsWarmup = isWarmup
-
-	expectedNumQueries := limit
-	if expectedNumQueries <= 0 {
-		expectedNumQueries = totalQueries
 	}
-	expectedTotalSentences := int64(10 * expectedNumQueries)
-
-	fmt.Printf("- Starting processing:\n")
-	doneProgressChan := make(chan struct{})
-
-	wg.Go(func() {
-		ticker := time.NewTicker(time.Second)
-		defer ticker.Stop()
-
-		var prevTokens int64
-		prevTime := startTime
-		var emaSpeed float64
-		var emaInitialized bool
-
-		updateDisplay := func(final bool) {
-			now := time.Now()
-			processed := atomic.LoadInt64(&speedStats.NumSentencesProcessed)
-			nonPadTokens := atomic.LoadInt64(&speedStats.NumNonPadTokensProcessed)
-			elapsed := now.Sub(startTime).Seconds()
-			var sentencesPerSecond float64
-			if elapsed > 0 {
-				sentencesPerSecond = float64(processed) / elapsed
-			}
-
-			dt := now.Sub(prevTime).Seconds()
-			if dt > 0 {
-				instTokSpeed := float64(nonPadTokens-prevTokens) / dt
-				if !emaInitialized {
-					emaSpeed = instTokSpeed
-					emaInitialized = true
-				} else {
-					emaSpeed = 0.3*instTokSpeed + 0.7*emaSpeed
-				}
-				prevTokens = nonPadTokens
-				prevTime = now
-			}
-
-			if final {
-				var avgTokSpeed float64
-				if elapsed > 0 {
-					avgTokSpeed = float64(nonPadTokens) / elapsed
-				}
-				fmt.Printf("\r  ✅ Processed %s / %s passages (%s, %s non-padding) -- done.%s\n",
-					humanize.Count(processed), humanize.Count(expectedTotalSentences),
-					humanize.Speed(sentencesPerSecond, "passages"),
-					humanize.Speed(avgTokSpeed, "tokens"), humanize.EraseToEndOfLine)
-				return
-			}
-
-			eta := "Unknown"
-			if processed > 0 && sentencesPerSecond > 0 {
-				remainingSeconds := float64(expectedTotalSentences-processed) / sentencesPerSecond
-				if remainingSeconds > 0 {
-					eta = humanize.Duration(time.Duration(int64(remainingSeconds*1e9)) * time.Nanosecond)
-				} else {
-					eta = "done"
-				}
-			}
-			fmt.Printf("\r   - Processed %s / %s passages (%s, %s non-padding) -- ETA %s ...%s",
-				humanize.Count(processed), humanize.Count(expectedTotalSentences),
-				humanize.Speed(sentencesPerSecond, "passages"),
-				humanize.Speed(emaSpeed, "tokens"), eta, humanize.EraseToEndOfLine)
-		}
-
-		for {
-			select {
-			case <-ticker.C:
-				updateDisplay(false)
-			case <-doneProgressChan:
-				updateDisplay(true)
-				return
-			}
-		}
-	})
-
-	var seenLengths sync.Map
-	var embeddersWg sync.WaitGroup
-	for _, worker := range workers {
-		w := worker
-		embeddersWg.Go(func() {
-			warmedWorker := false
-			for text := range passagesChan {
-				ids := tokenizer.Encode(text)
-				tokLen := min(len(ids), w.maxBatchTokens)
-
-				if isWarmup {
-					_, alreadySeenLen := seenLengths.LoadOrStore(tokLen, true)
-					if warmedWorker && alreadySeenLen {
-						atomic.AddInt64(&speedStats.NumSentencesProcessed, 1)
-						continue
-					}
-					if *flagShapes && !alreadySeenLen {
-						fmt.Printf("\n  - Shape [1, %d], %d tokens\n", tokLen, tokLen)
-					}
-				}
-
-				processedTokens, err := w.EmbedTokens(ids)
-				if err != nil {
-					fmt.Println()
-					klog.Fatalf("Failed to execute llama.cpp single-sequence embedding (len=%d): %+v", len(ids), err)
-				}
-				warmedWorker = true
-
-				atomic.AddInt64(&speedStats.NumTokensProcessed, int64(processedTokens))
-				atomic.AddInt64(&speedStats.NumNonPadTokensProcessed, int64(processedTokens))
-				atomic.AddInt64(&speedStats.NumSentencesProcessed, 1)
-			}
-		})
-	}
-
-	embeddersWg.Wait()
-	close(doneProgressChan)
-	wg.Wait()
-
-	speedStats.Elapsed = time.Since(startTime)
-	speedStats.CPUElapsed = cpuTime() - startCPUTime
-	speedStats.MaxRSSBytes = maxRSSBytes()
-	if isWarmup {
-		speedStats.UniqueShapes = mapLen(&seenLengths)
-	}
-	fmt.Printf("Total duration: %v\n", humanize.Duration(speedStats.Elapsed))
-	ReportSpeed(&speedStats)
+	return count
 }
 
-// runBucketBenchmark uses the two-bit token-budget Bucketizer (-bucket > 0).
-func runBucketBenchmark(workers []*llamaWorker, tokenizer tokenizers.Tokenizer, ds *datasets.Dataset, limit, totalQueries int, isWarmup bool) {
+func runBenchmark(workers []*llamaWorker, tokenizer tokenizers.Tokenizer, ds *datasets.Dataset, limit, totalQueries int, unpadded, isWarmup bool) {
 	var wg sync.WaitGroup
 
-	bucketsInputChan := make(chan bucket.SentenceRef, 5)
-	bucketsOutputChan := make(chan bucket.Bucket, 10)
+	bucketsInputChan := make(chan bucket.SentenceRef, max(5, len(workers)*2))
+	bucketsOutputChan := make(chan bucket.Bucket, max(10, len(workers)*2))
 	bkt := bucket.New(tokenizer).
-		ByTwoBitBucketBudget(*flagBucketBudget, 8).
-		WithMaxParallelization(-1).
-		WithBatchPadding(true)
+		WithMaxParallelization(-1)
+	if unpadded {
+		bkt.Unpadded()
+	} else {
+		bkt.ByTwoBitBucketBudget(*flagBucketBudget, 8).
+			WithBatchPadding(true)
+	}
 
 	wg.Go(func() {
 		bkt.Run(bucketsInputChan, bucketsOutputChan)
@@ -945,26 +799,40 @@ func runBucketBenchmark(workers []*llamaWorker, tokenizer tokenizers.Tokenizer, 
 	if expectedNumQueries <= 0 {
 		expectedNumQueries = totalQueries
 	}
-	var emaSpeed float64
-	var emaInitialized bool
 
 	fmt.Printf("- Starting processing:\n")
-	numSentencesProcessedChan := make(chan int)
-	var emaMu sync.RWMutex
+	numSentencesProcessedChan := make(chan int, max(16, len(workers)*2))
 
 	wg.Go(func() {
-		lastReportTime := time.Now()
+		lastReportTime := startTime
+		var lastReportTokens int64
+		var emaSpeed float64
+		var emaInitialized bool
 		var sentencesPerSecond float64
 		for count := range numSentencesProcessedChan {
 			speedStats.NumSentencesProcessed += int64(count)
 
 			if time.Since(lastReportTime) > time.Second {
-				lastReportTime = time.Now()
+				now := time.Now()
+				dt := now.Sub(lastReportTime).Seconds()
+				lastReportTime = now
 
-				sentencesPerSecond = float64(speedStats.NumSentencesProcessed) / time.Since(startTime).Seconds()
+				nonPadTokens := atomic.LoadInt64(&speedStats.NumNonPadTokensProcessed)
+				if dt > 0 {
+					instSpeed := float64(nonPadTokens-lastReportTokens) / dt
+					if !emaInitialized {
+						emaSpeed = instSpeed
+						emaInitialized = true
+					} else {
+						emaSpeed = 0.3*instSpeed + 0.7*emaSpeed
+					}
+					lastReportTokens = nonPadTokens
+				}
+
+				sentencesPerSecond = float64(speedStats.NumSentencesProcessed) / now.Sub(startTime).Seconds()
 				eta := "Unknown"
 				expectedTotalSentences := int64(10 * expectedNumQueries)
-				if speedStats.NumSentencesProcessed > 0 {
+				if speedStats.NumSentencesProcessed > 0 && sentencesPerSecond > 0 {
 					remainingSeconds := float64(expectedTotalSentences-speedStats.NumSentencesProcessed) / sentencesPerSecond
 					if remainingSeconds > 0 {
 						eta = humanize.Duration(time.Duration(int64(remainingSeconds*1e9)) * time.Nanosecond)
@@ -972,28 +840,28 @@ func runBucketBenchmark(workers []*llamaWorker, tokenizer tokenizers.Tokenizer, 
 						eta = "done"
 					}
 				}
-				emaMu.RLock()
-				speed := emaSpeed
-				emaMu.RUnlock()
 				fmt.Printf("\r   - Processed %s / %s passages (%s, %s non-padding) -- ETA %s ...%s",
 					humanize.Count(speedStats.NumSentencesProcessed), humanize.Count(expectedTotalSentences), humanize.Speed(sentencesPerSecond, "passages"),
-					humanize.Speed(speed, "tokens"), eta, humanize.EraseToEndOfLine)
+					humanize.Speed(emaSpeed, "tokens"), eta, humanize.EraseToEndOfLine)
 			}
 		}
+		elapsed := time.Since(startTime).Seconds()
+		var avgTokSpeed float64
+		if elapsed > 0 {
+			sentencesPerSecond = float64(speedStats.NumSentencesProcessed) / elapsed
+			avgTokSpeed = float64(atomic.LoadInt64(&speedStats.NumNonPadTokensProcessed)) / elapsed
+		}
 		expectedTotalSentences := int64(10 * expectedNumQueries)
-		emaMu.RLock()
-		speed := emaSpeed
-		emaMu.RUnlock()
 		fmt.Printf("\r  ✅ Processed %s / %s passages (%s, %s non-padding) -- done.%s\n",
 			humanize.Count(speedStats.NumSentencesProcessed), humanize.Count(expectedTotalSentences), humanize.Speed(sentencesPerSecond, "passages"),
-			humanize.Speed(speed, "tokens"), humanize.EraseToEndOfLine)
+			humanize.Speed(avgTokSpeed, "tokens"), humanize.EraseToEndOfLine)
 	})
 
 	var seenShapes sync.Map
 	var embeddersWg sync.WaitGroup
-	for _, worker := range workers {
-		w := worker
+	for _, w := range workers {
 		embeddersWg.Go(func() {
+			warmedWorker := false
 			for bk := range bucketsOutputChan {
 				if bk.Error != nil {
 					klog.Fatalf("Tokenization error: %v", bk.Error)
@@ -1004,51 +872,26 @@ func runBucketBenchmark(workers []*llamaWorker, tokenizer tokenizers.Tokenizer, 
 
 				if isWarmup {
 					key := shapeKey{batchSize, seqLen}
-					if _, loaded := seenShapes.LoadOrStore(key, true); loaded {
-						count := 0
-						for _, ref := range bk.References {
-							if ref != nil {
-								count++
-							}
-						}
-						numSentencesProcessedChan <- count
+					_, loaded := seenShapes.LoadOrStore(key, true)
+					if warmedWorker && loaded {
+						numSentencesProcessedChan <- countReferences(bk.References)
 						continue
 					}
-					if *flagShapes {
+					if *flagShapes && !loaded {
 						fmt.Printf("\n  - Shape [%d, %d], %d total tokens\n", batchSize, seqLen, len(bk.Batch))
 					}
 				}
 
-				batchStartTime := time.Now()
 				processedTokens, err := w.EmbedBucket(&bk)
 				if err != nil {
 					fmt.Println()
 					klog.Fatalf("Failed to execute llama.cpp embeddings for [%d, %d]: %+v", batchSize, seqLen, err)
 				}
+				warmedWorker = true
 
 				atomic.AddInt64(&speedStats.NumTokensProcessed, processedTokens)
-				atomic.AddInt64(&speedStats.NumNonPadTokensProcessed, int64(bk.NonPadTokens))
-
-				batchDuration := time.Since(batchStartTime).Seconds()
-				if batchDuration > 0 {
-					currentSpeed := float64(bk.NonPadTokens) / batchDuration
-					emaMu.Lock()
-					if !emaInitialized {
-						emaSpeed = currentSpeed
-						emaInitialized = true
-					} else {
-						emaSpeed = 0.1*currentSpeed + 0.9*emaSpeed
-					}
-					emaMu.Unlock()
-				}
-
-				count := 0
-				for _, ref := range bk.References {
-					if ref != nil {
-						count++
-					}
-				}
-				numSentencesProcessedChan <- count
+				atomic.AddInt64(&speedStats.NumNonPadTokensProcessed, processedTokens)
+				numSentencesProcessedChan <- countReferences(bk.References)
 			}
 		})
 	}
