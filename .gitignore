@@ -1,0 +1,4 @@
+/yzma_embedder
+*.prof
+*.pprof
+similarity_embeddings.txt
