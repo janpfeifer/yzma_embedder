@@ -95,7 +95,7 @@ cd yzma_embedder
 
 ### 2. Run the GoMLX Baseline (`go-huggingface`)
 
-Requires Go 1.26+ with `GOEXPERIMENT=simd`:
+Requires Go 1.27+ with `GOEXPERIMENT=simd`:
 
 ```bash
 GOEXPERIMENT=simd GOMLX_BACKEND=go:quantized_cache \
