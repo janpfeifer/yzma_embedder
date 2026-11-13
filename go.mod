@@ -4,8 +4,8 @@ go 1.27
 
 require (
 	github.com/charmbracelet/lipgloss v1.1.0
-	github.com/gomlx/compute v0.1.29-0.20261112222756-256350f63771
-	github.com/gomlx/go-huggingface v0.4.33-0.20261113080249-533486344067
+	github.com/gomlx/compute v0.1.29-0.20261113091304-1512c3e4bdaa
+	github.com/gomlx/go-huggingface v0.4.33-0.20261113091830-cdb32325b68d
 	github.com/hybridgroup/yzma v1.32.0
 	k8s.io/klog/v2 v2.140.0
 )
@@ -62,7 +62,7 @@ require (
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/gofrs/flock v0.13.0 // indirect
-	github.com/gomlx/gomlx v0.28.35-0.20261112223057-1e5a63928ecd // indirect
+	github.com/gomlx/gomlx v0.28.35-0.20261113091712-2f8848490e8b // indirect
 	github.com/google/s2a-go v0.1.9 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/googleapis/enterprise-certificate-proxy v0.3.14 // indirect
