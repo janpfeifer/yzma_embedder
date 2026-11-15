@@ -113,7 +113,9 @@ On first run, `yzma_embedder` automatically downloads prebuilt `llama.cpp` share
 
 - **CPU**: Apple M6 (12 cores total: 2 Super, 4 Performance, 6 Efficiency; ARMv9.2-A with NEON `USDOT` / `I8MM` and SME2)
 - **OS / Go**: macOS `darwin/arm64`, Go `1.27.3` (`GOEXPERIMENT=simd` for GoMLX; activates NEON + SME2 kernels)
-- **Configuration**: `-bucket=0 -num_embedders=12 -limit 1000 -warmup` across all 13 GGUF quantizations of `second-state/All-MiniLM-L6-v2-Embedding-GGUF` (GoMLX with `GOMLX_BACKEND=go:quantized_cache -dynamic=true`)
+- **Configuration**: `-bucket=0 -num_embedders=12 -warmup` (GoMLX with `GOMLX_BACKEND=go:quantized_cache -dynamic=true`)
+
+#### 2.1 `second-state/All-MiniLM-L6-v2-Embedding-GGUF` (6 layers, `d_model=384`, `-limit=1000`)
 
 <table>
   <thead>
@@ -132,19 +134,57 @@ On first run, `yzma_embedder` automatically downloads prebuilt `llama.cpp` share
     </tr>
   </thead>
   <tbody>
-    <tr><td><code>Q2_K</code></td><td align="right">867</td><td align="right">67.1K</td><td align="right">388.6 MiB</td><td align="right">1K</td><td align="right">79.8K</td><td align="right">387.9 MiB</td></tr>
-    <tr><td><code>Q3_K_S</code></td><td align="right">859</td><td align="right">66.5K</td><td align="right">384.3 MiB</td><td align="right">1K</td><td align="right">79.3K</td><td align="right">397.1 MiB</td></tr>
-    <tr><td><code>Q3_K_M</code></td><td align="right">759</td><td align="right">58.8K</td><td align="right">427.0 MiB</td><td align="right">1.1K</td><td align="right">88K</td><td align="right">390.3 MiB</td></tr>
-    <tr><td><code>Q3_K_L</code></td><td align="right">701</td><td align="right">54.3K</td><td align="right">361.6 MiB</td><td align="right">1.1K</td><td align="right">87.5K</td><td align="right">387.9 MiB</td></tr>
-    <tr><td><code>Q4_0</code></td><td align="right">951</td><td align="right">73.6K</td><td align="right">372.6 MiB</td><td align="right">1.1K</td><td align="right">87.7K</td><td align="right">397.5 MiB</td></tr>
-    <tr><td><code>Q4_K_S</code></td><td align="right">744</td><td align="right">57.6K</td><td align="right">391.3 MiB</td><td align="right">1.1K</td><td align="right">87.4K</td><td align="right">382.8 MiB</td></tr>
-    <tr><td><code>Q4_K_M</code></td><td align="right">737</td><td align="right">57K</td><td align="right">389.9 MiB</td><td align="right">1.1K</td><td align="right">82K</td><td align="right">396.9 MiB</td></tr>
-    <tr><td><code>Q5_0</code></td><td align="right">718</td><td align="right">55.6K</td><td align="right">410.9 MiB</td><td align="right">1.1K</td><td align="right">84.6K</td><td align="right">397.0 MiB</td></tr>
-    <tr><td><code>Q5_K_S</code></td><td align="right">660</td><td align="right">51.1K</td><td align="right">366.7 MiB</td><td align="right">1.1K</td><td align="right">83.6K</td><td align="right">392.1 MiB</td></tr>
-    <tr><td><code>Q5_K_M</code></td><td align="right">661</td><td align="right">51.2K</td><td align="right">369.8 MiB</td><td align="right">1K</td><td align="right">79.6K</td><td align="right">398.9 MiB</td></tr>
-    <tr><td><code>Q6_K</code></td><td align="right">683</td><td align="right">52.9K</td><td align="right">372.8 MiB</td><td align="right">956</td><td align="right">74K</td><td align="right">396.8 MiB</td></tr>
-    <tr><td><code>Q8_0</code></td><td align="right">836</td><td align="right">64.7K</td><td align="right">347.7 MiB</td><td align="right">1K</td><td align="right">81.1K</td><td align="right">390.4 MiB</td></tr>
-    <tr><td><code>F16</code></td><td align="right">722</td><td align="right">55.8K</td><td align="right">406.1 MiB</td><td align="right">661</td><td align="right">51.2K</td><td align="right">569.6 MiB</td></tr>
+    <tr><td><code>Q2_K</code></td><td align="right">859</td><td align="right">66.5K</td><td align="right">385.8 MiB</td><td align="right">1K</td><td align="right">81.2K</td><td align="right">388.1 MiB</td></tr>
+    <tr><td><code>Q3_K_S</code></td><td align="right">848</td><td align="right">65.7K</td><td align="right">372.3 MiB</td><td align="right">1K</td><td align="right">79.2K</td><td align="right">401.2 MiB</td></tr>
+    <tr><td><code>Q3_K_M</code></td><td align="right">751</td><td align="right">58.2K</td><td align="right">374.7 MiB</td><td align="right">1.1K</td><td align="right">88.9K</td><td align="right">394.4 MiB</td></tr>
+    <tr><td><code>Q3_K_L</code></td><td align="right">695</td><td align="right">53.8K</td><td align="right">355.4 MiB</td><td align="right">1.1K</td><td align="right">88.8K</td><td align="right">399.7 MiB</td></tr>
+    <tr><td><code>Q4_0</code></td><td align="right">937</td><td align="right">72.5K</td><td align="right">346.7 MiB</td><td align="right">1.1K</td><td align="right">89K</td><td align="right">381.2 MiB</td></tr>
+    <tr><td><code>Q4_K_S</code></td><td align="right">742</td><td align="right">57.4K</td><td align="right">364.5 MiB</td><td align="right">1.2K</td><td align="right">89.2K</td><td align="right">391.0 MiB</td></tr>
+    <tr><td><code>Q4_K_M</code></td><td align="right">712</td><td align="right">55.1K</td><td align="right">400.0 MiB</td><td align="right">1.1K</td><td align="right">84.6K</td><td align="right">393.5 MiB</td></tr>
+    <tr><td><code>Q5_0</code></td><td align="right">728</td><td align="right">56.3K</td><td align="right">370.2 MiB</td><td align="right">1.1K</td><td align="right">87.7K</td><td align="right">389.7 MiB</td></tr>
+    <tr><td><code>Q5_K_S</code></td><td align="right">655</td><td align="right">50.7K</td><td align="right">452.3 MiB</td><td align="right">1.1K</td><td align="right">88.3K</td><td align="right">395.3 MiB</td></tr>
+    <tr><td><code>Q5_K_M</code></td><td align="right">664</td><td align="right">51.4K</td><td align="right">382.6 MiB</td><td align="right">1.1K</td><td align="right">82.7K</td><td align="right">390.8 MiB</td></tr>
+    <tr><td><code>Q6_K</code></td><td align="right">695</td><td align="right">53.8K</td><td align="right">360.4 MiB</td><td align="right">1K</td><td align="right">78.2K</td><td align="right">391.3 MiB</td></tr>
+    <tr><td><code>Q8_0</code></td><td align="right">860</td><td align="right">66.5K</td><td align="right">376.3 MiB</td><td align="right">1.1K</td><td align="right">86.8K</td><td align="right">386.0 MiB</td></tr>
+    <tr><td><code>F16</code></td><td align="right">725</td><td align="right">56.1K</td><td align="right">418.2 MiB</td><td align="right">800</td><td align="right">61.9K</td><td align="right">447.6 MiB</td></tr>
+    <tr><td><code>F16</code> (<code>-force_f32</code>)</td><td align="right">—</td><td align="right">—</td><td align="right">—</td><td align="right">867</td><td align="right">67.1K</td><td align="right">527.9 MiB</td></tr>
+  </tbody>
+</table>
+
+#### 2.2 `ChristianAzinn/bge-base-en-v1.5-gguf` (12 layers, `d_model=768`, `-limit=200`)
+
+<table>
+  <thead>
+    <tr>
+      <th rowspan="2" align="left">Quantization</th>
+      <th colspan="3" align="center"><code>yzma</code> + <code>llama.cpp</code></th>
+      <th colspan="3" align="center">GoMLX + Go backend (<code>go:quantized_cache</code>)</th>
+    </tr>
+    <tr>
+      <th align="right">Passages/s</th>
+      <th align="right">Tokens/s</th>
+      <th align="right">Max RSS</th>
+      <th align="right">Passages/s</th>
+      <th align="right">Tokens/s</th>
+      <th align="right">Max RSS</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr><td><code>Q2_K</code></td><td align="right">83</td><td align="right">6.4K</td><td align="right">502.6 MiB</td><td align="right">119</td><td align="right">9.2K</td><td align="right">681.4 MiB</td></tr>
+    <tr><td><code>Q3_K_S</code></td><td align="right">82</td><td align="right">6.3K</td><td align="right">525.3 MiB</td><td align="right">115</td><td align="right">8.8K</td><td align="right">645.0 MiB</td></tr>
+    <tr><td><code>Q3_K_M</code></td><td align="right">107</td><td align="right">8.3K</td><td align="right">531.0 MiB</td><td align="right">133</td><td align="right">10.2K</td><td align="right">691.3 MiB</td></tr>
+    <tr><td><code>Q3_K_L</code></td><td align="right">93</td><td align="right">7.2K</td><td align="right">550.7 MiB</td><td align="right">131</td><td align="right">10.1K</td><td align="right">698.0 MiB</td></tr>
+    <tr><td><code>Q4_0</code></td><td align="right">154</td><td align="right">11.8K</td><td align="right">431.8 MiB</td><td align="right">163</td><td align="right">12.6K</td><td align="right">686.1 MiB</td></tr>
+    <tr><td><code>Q4_K_S</code></td><td align="right">106</td><td align="right">8.2K</td><td align="right">423.0 MiB</td><td align="right">159</td><td align="right">12.2K</td><td align="right">672.5 MiB</td></tr>
+    <tr><td><code>Q4_K_M</code></td><td align="right">104</td><td align="right">8K</td><td align="right">418.2 MiB</td><td align="right">148</td><td align="right">11.4K</td><td align="right">655.2 MiB</td></tr>
+    <tr><td><code>Q5_0</code></td><td align="right">86</td><td align="right">6.6K</td><td align="right">562.1 MiB</td><td align="right">157</td><td align="right">12K</td><td align="right">686.0 MiB</td></tr>
+    <tr><td><code>Q5_K_S</code></td><td align="right">80</td><td align="right">6.2K</td><td align="right">433.0 MiB</td><td align="right">159</td><td align="right">12.2K</td><td align="right">684.6 MiB</td></tr>
+    <tr><td><code>Q5_K_M</code></td><td align="right">88</td><td align="right">6.8K</td><td align="right">443.7 MiB</td><td align="right">153</td><td align="right">11.8K</td><td align="right">707.0 MiB</td></tr>
+    <tr><td><code>Q6_K</code></td><td align="right">81</td><td align="right">6.2K</td><td align="right">458.1 MiB</td><td align="right">110</td><td align="right">8.4K</td><td align="right">683.9 MiB</td></tr>
+    <tr><td><code>Q8_0</code></td><td align="right">130</td><td align="right">10K</td><td align="right">497.9 MiB</td><td align="right">161</td><td align="right">12.4K</td><td align="right">657.3 MiB</td></tr>
+    <tr><td><code>FP16</code></td><td align="right">82</td><td align="right">6.3K</td><td align="right">695.5 MiB</td><td align="right">103</td><td align="right">7.9K</td><td align="right">891.4 MiB</td></tr>
+    <tr><td><code>FP16</code> (<code>-force_f32</code>)</td><td align="right">—</td><td align="right">—</td><td align="right">—</td><td align="right">117</td><td align="right">9K</td><td align="right">1.0 GiB</td></tr>
+    <tr><td><code>FP32</code></td><td align="right">97</td><td align="right">7.4K</td><td align="right">747.2 MiB</td><td align="right">109</td><td align="right">8.4K</td><td align="right">1.1 GiB</td></tr>
   </tbody>
 </table>
 
@@ -158,15 +198,16 @@ On first run, `yzma_embedder` automatically downloads prebuilt `llama.cpp` share
 
 2. **`ggml` `CPU_REPACK` Coverage vs GoMLX's Universal Pre-Packed 2D GEMMs (`AVX-512 VNNI` on `amd64`, Hybrid `SME2 + NEON USDOT` on `arm64`)**:
    - **On `MiniLM-L6-v2` (`d_model = 384`, 6 layers, `22M` params)**: `384` is not a multiple of `256` (the K-quant super-block size), so K-quantization fell back heavily on 384-dim matrices (`-verbose_llama`):
-     - `Q4_K_M` ended up with `28 × q5_0`, `2 × q8_0` encoder weights, `2 × q6_K`, and only `4 × q4_K` (`1.27 MiB` `CPU_REPACK`), leaving 97 of 101 tensors un-repacked (`76.4K tokens/s` on Ryzen, `57K` on M6).
-     - `Q5_0`, `Q5_K_S`, `Q5_K_M`, `Q6_K`, and `Q8_0` had `0` `CPU_REPACK` tensors (dropping as low as `42.9K tokens/s` on Ryzen).
-     - Only `Q4_0` (block size `32`, repacking all 36 encoder weights = `5.70 MiB` `CPU_REPACK`) and `Q2_K`/`Q3_K_S` (`30 × iq4_nl` = `3.80 MiB`) got broad repacking, peaking at `117.6K tokens/s` (`Q4_0`) on Ryzen and `73.6K tokens/s` on M6.
+     - `Q4_K_M` ended up with `28 × q5_0`, `2 × q8_0` encoder weights, `2 × q6_K`, and only `4 × q4_K` (`1.27 MiB` `CPU_REPACK`), leaving 97 of 101 tensors un-repacked (`76.4K tokens/s` on Ryzen, `55.1K` on M6).
+     - `Q5_0`, `Q5_K_S`, `Q5_K_M`, `Q6_K`, and `Q8_0` had `0` `CPU_REPACK` tensors (dropping as low as `42.9K tokens/s` on Ryzen and `50.7K` on M6).
+     - Only `Q4_0` (block size `32`, repacking all 36 encoder weights = `5.70 MiB` `CPU_REPACK`) and `Q2_K`/`Q3_K_S` (`30 × iq4_nl` = `3.80 MiB`) got broad repacking, peaking at `117.6K tokens/s` (`Q4_0`) on Ryzen and `72.5K tokens/s` on M6.
    - **On `bge-base-en-v1.5` (`d_model = 768`, 12 layers, `109M` params)**: `768 = 3 × 256` **is** a multiple of `256`, so `llama.cpp` avoids the `q5_0` fallback (`Q4_K_M` repacks `60 × q4_K` = `36.07 MiB`, `Q4_K_S` repacks `65 × q4_K` = `40.50 MiB`, `Q4_0` repacks `72 × q4_0` = `45.56 MiB`).
-     - Yet `llama.cpp`'s throughput on `bge-base` still varies sharply by format: `Q5_K_S` (`27.2K tokens/s`) and `Q5_K_M` (`26.6K`) actually edge out repacked `Q4_0` (`23.9K`) and `Q4_K_M` (`21.3K`), while `Q5_0` (`10.8K`) and `Q8_0` (`13.4K`) — which have neither `CPU_REPACK` nor fast K-quant `vec_dot` — drop by more than `2×`.
-   - **GoMLX stays faster and uniform across all quantizations on both models**: With `GOMLX_BACKEND=go:quantized_cache`, GoMLX pre-unpacks **every** GGML quantized format (`Q2_K`–`Q8_0`) once into shared K4-interleaved `uint8` panels and executes 2D register-tiled GEMMs (`AVX-512 VNNI VPDPBUSD` on Ryzen; `SME2 + NEON USDOT` on Apple M6) with fused `Bias + GELU` epilogues:
+     - Yet `llama.cpp`'s throughput on `bge-base` still varies sharply by format: on Ryzen, `Q5_K_S` (`27.2K tokens/s`) and `Q5_K_M` (`26.6K`) edge out repacked `Q4_0` (`23.9K`) and `Q4_K_M` (`21.3K`), while `Q5_0` (`10.8K`) and `Q8_0` (`13.4K`) drop by more than `2×`; on Apple M6, only `Q4_0` (`11.8K tokens/s`) and `Q8_0` (`10K`) reach double-digit K tokens/s, while K-quants drop to `6.2K–8.3K tokens/s`.
+   - **GoMLX stays faster and uniform across all quantizations on both models and both CPUs**: With `GOMLX_BACKEND=go:quantized_cache`, GoMLX pre-unpacks **every** GGML quantized format (`Q2_K`–`Q8_0`) once into shared K4-interleaved `uint8` panels and executes 2D register-tiled GEMMs (`AVX-512 VNNI VPDPBUSD` on Ryzen; `SME2 + NEON USDOT` on Apple M6) with fused `Bias + GELU` epilogues:
      - **Ryzen 9950X3D — `MiniLM-L6-v2` (`22M`)**: GoMLX sustains **`328.2K–349.9K tokens/s`** across all quantized formats — **`2.9×` faster** than `llama.cpp` on fully repacked `Q4_0` (`346.2K` vs `117.6K`), **`4.5×` faster** on `Q4_K_M` (`342K` vs `76.4K`), **`8.1×` faster** on `Q5_K_S` (`348.7K` vs `42.9K`), and **`2.2×` faster** on native `F16` (`125.7K` vs `56.9K`, or **`2.6×` faster** at `145.1K` with `-force_f32`).
      - **Ryzen 9950X3D — `bge-base-en-v1.5` (`109M`)**: Even with `d_model = 768` allowing full `Q4_K`/`Q4_0` `CPU_REPACK` in `llama.cpp`, GoMLX wins on **every single format** (`29.9K–36.6K tokens/s` quantized): **`1.51×` faster** on `Q4_0` (`36.2K` vs `23.9K`), **`1.64×` faster** on `Q4_K_M` (`34.9K` vs `21.3K`), **`1.72×` faster** on `Q4_K_S` (`36.6K` vs `21.3K`), **`1.31×` faster** on `llama.cpp`'s fastest quant `Q5_K_S` (`35.6K` vs `27.2K`), **`2.71×` faster** on `Q8_0` (`36.3K` vs `13.4K`), **`3.39×` faster** on `Q5_0` (`36.6K` vs `10.8K`), **`1.76×` faster** on native `FP16` (`15.1K` vs `8.6K`), and **`1.09×` faster** on `FP32` (`8.8K` vs `8.1K`). With `-force_f32`, `FP16` drops back to `FP32` speed and memory (`8.7K tokens/s`, `1.5 GiB`), confirming the benefit of native `Float16` weights and GEMMs.
-     - **Apple M6 — `MiniLM-L6-v2` (`22M`)**: GoMLX outperforms `llama.cpp` on every quantized format (`74K–88K tokens/s` vs `51.1K–73.6K`), including **`1.19×` faster** on `Q4_0` (`87.7K` vs `73.6K`), **`1.44×` faster** on `Q4_K_M` (`82K` vs `57K`), and **`1.64×` faster** on `Q5_K_S` (`83.6K` vs `51.1K`), while `llama.cpp` remains slightly ahead on unquantized `F16` (`55.8K` vs `51.2K`).
+     - **Apple M6 — `MiniLM-L6-v2` (`22M`)**: GoMLX now beats `llama.cpp` across **every single quantization and float format**: `78.2K–89.2K tokens/s` vs `50.7K–72.5K` on quantized models (**`1.23×` faster** on `Q4_0` at `89K` vs `72.5K`, **`1.54×` faster** on `Q4_K_M` at `84.6K` vs `55.1K`, **`1.74×` faster** on `Q5_K_S` at `88.3K` vs `50.7K`), **`1.10×` faster** on native `F16` (`61.9K` vs `56.1K`, saving `80.3 MiB` RSS over `-force_f32`), and **`1.20×` faster** with `F16 -force_f32` (`67.1K` vs `56.1K`).
+     - **Apple M6 — `bge-base-en-v1.5` (`109M`)**: GoMLX wins on **every single format** (`8.4K–12.6K tokens/s` quantized vs `6.2K–11.8K`): **`1.07×` faster** on `Q4_0` (`12.6K` vs `11.8K`), **`1.43×` faster** on `Q4_K_M` (`11.4K` vs `8K`), **`1.49×` faster** on `Q4_K_S` (`12.2K` vs `8.2K`), **`1.97×` faster** on `Q5_K_S` (`12.2K` vs `6.2K`), **`1.82×` faster** on `Q5_0` (`12K` vs `6.6K`), **`1.24×` faster** on `Q8_0` (`12.4K` vs `10K`), **`1.25×` faster** on native `FP16` (`7.9K` vs `6.3K`, or **`1.43×` faster** at `9K` with `-force_f32`), and **`1.14×` faster** on `FP32` (`8.4K` vs `7.4K`).
 
 3. **Cache Footprint & Memory Trade-Off (`22M` vs `109M` Models)**:
    - On `MiniLM-L6-v2` (`22M`), the entire pre-packed weight set fits comfortably inside Ryzen 9 9950X3D's L3 / 3D V-Cache, allowing GoMLX to achieve **`2.9×–8.1×`** speedups with only ~`50–80 MiB` extra RSS (`476–499 MiB` vs `370–460 MiB`). Because even `FP32` weights fit in 3D V-Cache, `-force_f32` (`145.1K tokens/s`, `635.3 MiB`) is faster than native `F16` (`125.7K tokens/s`, `489.6 MiB`) by avoiding `Float16 <-> Float32` conversions in GEMM/LayerNorm/SDPA, while native `F16` saves `145.7 MiB` of RSS.
