@@ -169,7 +169,7 @@ On first run, `yzma_embedder` automatically downloads prebuilt `llama.cpp` share
      - **Apple M6 — `MiniLM-L6-v2` (`22M`)**: GoMLX outperforms `llama.cpp` on every quantized format (`74K–88K tokens/s` vs `51.1K–73.6K`), including **`1.19×` faster** on `Q4_0` (`87.7K` vs `73.6K`), **`1.44×` faster** on `Q4_K_M` (`82K` vs `57K`), and **`1.64×` faster** on `Q5_K_S` (`83.6K` vs `51.1K`), while `llama.cpp` remains slightly ahead on unquantized `F16` (`55.8K` vs `51.2K`).
 
 3. **Cache Footprint & Memory Trade-Off (`22M` vs `109M` Models)**:
-   - On `MiniLM-L6-v2` (`22M`), the entire pre-packed weight set fits comfortably inside Ryzen 9 9950X3D's L3 / 3D V-Cache, allowing GoMLX to achieve **`2.9×–8.1×`** speedups with only ~`50–80 MiB` extra RSS (`476–499 MiB` vs `370–460 MiB`). Because even `FP32` weights fit in 3D V-Cache, `-force_f32` (`145.1K tokens/s`, `635.3 MiB`) is faster than native `F16` (`125.7K tokens/s`, `489.6 MiB`) by avoiding `Float16` conversions and decomposed attention, while native `F16` saves `145.7 MiB` of RSS.
+   - On `MiniLM-L6-v2` (`22M`), the entire pre-packed weight set fits comfortably inside Ryzen 9 9950X3D's L3 / 3D V-Cache, allowing GoMLX to achieve **`2.9×–8.1×`** speedups with only ~`50–80 MiB` extra RSS (`476–499 MiB` vs `370–460 MiB`). Because even `FP32` weights fit in 3D V-Cache, `-force_f32` (`145.1K tokens/s`, `635.3 MiB`) is faster than native `F16` (`125.7K tokens/s`, `489.6 MiB`) by avoiding `Float16 <-> Float32` conversions in GEMM/LayerNorm/SDPA, while native `F16` saves `145.7 MiB` of RSS.
    - On `bge-base-en-v1.5` (`109M`, ~8× the GEMM FLOPs and ~5× the parameters), the pre-packed weights exceed the smaller `32 MiB` non-3D CCD L3 cache and become more memory-bandwidth-bound across CCDs/DRAM (`786–844 MiB` vs `478–553 MiB` RSS for quantized formats). Here, keeping weights in native `Float16` cuts GoMLX's `FP16` RSS from `1.5 GiB` (`-force_f32` / `FP32`) down to `965.4 MiB` and jumps throughput from `8.7K` to `15.1K tokens/s` (`1.76×` faster than `llama.cpp`'s `8.6K`), while quantized GoMLX still retains a consistent **`1.20×–3.39×`** lead over `llama.cpp`.
 
 ---
@@ -239,7 +239,7 @@ Use **`-quant`** to select a quantization tag case-insensitively (e.g. `-quant=Q
 
 ### 2. Run the GoMLX Baseline (`go-huggingface`)
 
-Requires Go 1.27+ with `GOEXPERIMENT=simd` (use `-gguf_file` to select a specific quantization file, such as `all-MiniLM-L6-v2-Q4_0.gguf`):
+Requires Go 1.27+ with `GOEXPERIMENT=simd` (use `-gguf_file` to select a specific quantization file, such as `all-MiniLM-L6-v2-Q4_0.gguf`, and `-force_f32` to force `Float32` execution on `F16`/`BF16` GGUF models instead of native half-precision):
 
 - **Unpadded parallel single-sequence mode (`-bucket=0 -num_embedders=32`, fastest on CPU)**:
   ```bash
