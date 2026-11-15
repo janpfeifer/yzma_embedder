@@ -27,7 +27,7 @@ On first run, `yzma_embedder` automatically downloads prebuilt `llama.cpp` share
 ## Benchmark Results
 
 **Shared Workload:**
-- **Dataset & Model**: `-limit 1000` queries (**10,000 passages**, **773,300 non-padding tokens**, ~77.3 tokens/passage) after `-warmup` on `second-state/All-MiniLM-L6-v2-Embedding-GGUF` (`all-MiniLM-L6-v2-Q4_K_M.gguf`)
+- **Dataset & Model**: `-limit 1000` queries (**10,000 passages**, **773,300 non-padding tokens**, ~77.3 tokens/passage) after `-warmup` across all 13 GGUF quantizations of `second-state/All-MiniLM-L6-v2-Embedding-GGUF`
 - **`llama.cpp` / `yzma`**: `llama.cpp` `0.9.0-dev` (build `b12110`) via `yzma` `v1.32.0` (CPU backend, `-ngl=0`)
 
 ### 1. AMD Ryzen 9 9950X3D (Linux `amd64`, 16 Cores / 32 Threads)
@@ -113,16 +113,31 @@ On first run, `yzma_embedder` automatically downloads prebuilt `llama.cpp` share
 ### Why `-bucket=0 -num_embedders=GOMAXPROCS` Excels on CPU, and Why GoMLX Is Faster
 
 1. **Unpadded Parallel Single-Sequence Execution (`-bucket=0 -num_embedders=GOMAXPROCS`)**:
-   - In **`llama.cpp` (`ggml`)**, multi-sequence batches have no separate `batchSize` axis — sequences in a `ubatch` of length $U = \sum_i \text{seqLen}_i$ are concatenated end-to-end and masked via a dense `[U, U]` attention matrix ($U^2$ instead of $\sum_i \text{seqLen}_i^2$). Running 1 unpadded sequence per worker across independent single-threaded contexts eliminates both cross-sequence $O(U^2)$ attention and `ggml` threadpool barrier overhead, jumping from `34.6K` to **`76.3K tokens/s`** on Ryzen 9950X3D (`32` embedders) and from `27.2K` to **`60.0K tokens/s`** on Apple M6 (`12` embedders).
-   - In **GoMLX**, switching from bucketed single-embedder execution (`-bucket=8192 -num_embedders=1`) to unpadded dynamic `seq_len` across `GOMAXPROCS` embedders (`-bucket=0`) eliminates all bucket-padding compute, removes intra-op worker synchronization (`OpsExecutionDynamic` runs each independent embedder sequentially on its own hardware thread), and keeps each passage's `[1, seqLen, 384]` activations hot inside that core's private L1/L2 cache — reaching **`364.7K tokens/s`** on Ryzen 9950X3D (`32` embedders) and **`86.4K tokens/s`** on Apple M6 (`12` embedders).
-2. **2D Register-Tiled Quantized GEMM (`AVX-512 VNNI` on `amd64`, Hybrid `SME2 + NEON USDOT` on `arm64`) vs Row-by-Row Dot-Products**:
-   - In the exact same `-bucket=0` configuration, each call processes a single passage of $M \approx 77$ token rows. `llama.cpp` unpacks `Q4_K` nibbles and 6-bit scales on-the-fly inside row-by-row `ggml_vec_dot_q4_K_q8_K` vector dots.
-   - On **`amd64` (Ryzen 9950X3D)**, GoMLX executes 2D register-tiled AVX-512 VNNI (`VPDPBUSD`) GEMMs across multiple sequence rows simultaneously with fused in-tile `Bias + GELU` epilogues — reaching **`222.5K tokens/s`** (`2.9×` faster) with streaming `2 MB` panel chunks (`GOMLX_BACKEND=go`), and **`364.7K tokens/s`** (**`4.8×` faster**, `6.5ms` CPU/passage) when constant GGUF weights are pre-packed once into shared L3-resident K4-interleaved `uint8` panels (`GOMLX_BACKEND=go:quantized_cache`).
-   - On **`arm64` (Apple M6)**, GoMLX combines per-cluster SME2 `SUMOPA` + `FMOPA` 16×16 outer-product matrix tiles with 3×16 NEON `USDOT` microkernels across the remaining cores and handwritten NEON `Q8_0`/`Q8_K` activation quantizers, `GELU`, and `LayerNorm` — reaching **`73.6K tokens/s`** (`1.23×` faster than `llama.cpp`) with `GOMLX_BACKEND=go`, and **`86.4K tokens/s`** (**`1.44×` faster**, `10.6ms` CPU/passage) with `GOMLX_BACKEND=go:quantized_cache`.
+   - In **`llama.cpp` (`ggml`)**, multi-sequence batches have no separate `batchSize` axis — sequences in a `ubatch` of length $U = \sum_i \text{seqLen}_i$ are concatenated end-to-end and masked via a dense `[U, U]` attention matrix ($U^2$ instead of $\sum_i \text{seqLen}_i^2$). Running 1 unpadded sequence per worker across independent single-threaded contexts eliminates both cross-sequence $O(U^2)$ attention and `ggml` threadpool barrier overhead, reaching up to **`117.6K tokens/s`** (`1.5K passages/s` on `Q4_0`; `76.4K tokens/s` on default `Q4_K_M`) on Ryzen 9950X3D (`32` embedders) and **`73.6K tokens/s`** (`951 passages/s` on `Q4_0`; `57K tokens/s` on `Q4_K_M`) on Apple M6 (`12` embedders).
+   - In **GoMLX**, running unpadded dynamic `seq_len` across `GOMAXPROCS` independent embedders (`-bucket=0`) eliminates all bucket-padding compute, removes intra-op worker synchronization (`OpsExecutionDynamic` runs each embedder sequentially on its own hardware thread), and keeps each passage's `[1, seqLen, 384]` activations hot inside that core's private L1/L2 cache — reaching **`342K–349.9K tokens/s`** (`4.4K–4.5K passages/s` across `Q3_K_M`–`Q5_K_M` and `Q8_0`) on Ryzen 9950X3D (`32` embedders) and up to **`88K tokens/s`** (`1.1K passages/s` on `Q3_K_M`, `87.7K` on `Q4_0`, `82K` on `Q4_K_M`) on Apple M6 (`12` embedders).
+2. **`ggml` `CPU_REPACK` Coverage vs GoMLX's Universal Pre-Packed 2D GEMMs (`AVX-512 VNNI` on `amd64`, Hybrid `SME2 + NEON USDOT` on `arm64`)**:
+   - **Why `llama.cpp` varies sharply across quantizations on `all-MiniLM-L6-v2`**: `llama.cpp` only activates its fast `CPU_REPACK` (`*_8x8`) GEMM layout for specific block formats (`q4_0`, `iq4_nl`, `q4_K`), and MiniLM's `d_model = 384` is not a multiple of `256` (the K-quant super-block size). As a result (`-verbose_llama`):
+     - In **`Q4_K_M`**, 30 of the 36 encoder weight matrices (`d_model = 384`) fell back during quantization to `28 × q5_0` + `2 × q8_0` (plus `1 × q8_0` `token_embd`, `1 × f16` `position_embd`, `63 × f32` biases/norms), leaving only `4 × q4_K` (`ffn_down` with `K = 1536`, **`1.27 MiB`**) and `2 × q6_K` tensors. `llama.cpp` logs that 97 of 101 tensors cannot use `CPU_REPACK`, so most matmuls fall back to the slower un-repacked path (`76.4K tokens/s` on Ryzen, `57K` on M6).
+     - In **`Q5_0`**, **`Q5_K_S`**, **`Q5_K_M`**, **`Q6_K`**, and **`Q8_0`**, `0` tensors use `CPU_REPACK`, dropping throughput as low as `42.9K tokens/s` on Ryzen.
+     - By contrast, **`Q4_0`** (block size `32`) divides `384` cleanly: all **36** encoder weight tensors are `q4_0` and repacked into `q4_0_8x8` (**`5.70 MiB`** `CPU_REPACK`), making `Q4_0` `llama.cpp`'s fastest format (`117.6K tokens/s` on Ryzen, `73.6K` on M6), followed by `Q2_K`/`Q3_K_S` (`30 × iq4_nl` tensors repacked, **`3.80 MiB`**).
+   - **Why GoMLX is still faster — and consistent across all quantizations**: With `GOMLX_BACKEND=go:quantized_cache`, GoMLX pre-unpacks **every** GGML quantized format (`Q2_K` through `Q8_0`, including `Q5_0`, `Q5_1`, `Q5_K`, `Q6_K`, `Q8_0`) once into shared L3-resident K4-interleaved `uint8` panels, keeping throughput nearly flat across all quantized files:
+     - On **`amd64` (Ryzen 9950X3D)**, 2D register-tiled AVX-512 VNNI (`VPDPBUSD`) GEMMs across multiple sequence rows with fused in-tile `Bias + GELU` epilogues sustain **`328.2K–349.9K tokens/s`** across all quantized formats — **`2.9×` faster** than `llama.cpp` even on fully repacked **`Q4_0`** (`346.2K` vs `117.6K`), **`4.5×` faster** on default `Q4_K_M` (`342K` vs `76.4K`), and **`8.1×` faster** on `Q5_K_S` (`348.7K` vs `42.9K`), plus **`2.6×` faster** on `F16` (`145.4K` vs `56.9K`).
+     - On **`arm64` (Apple M6)**, GoMLX combines per-cluster SME2 `SUMOPA` + `FMOPA` 16×16 outer-product matrix tiles with 3×16 NEON `USDOT` microkernels across the remaining cores and handwritten NEON `Q8_0`/`Q8_K` activation quantizers, `GELU`, and `LayerNorm` — outperforming `llama.cpp` on every quantized format (`74K–88K tokens/s` vs `51.1K–73.6K`), including **`1.19×` faster** on fully repacked **`Q4_0`** (`87.7K` vs `73.6K`), **`1.44×` faster** on `Q4_K_M` (`82K` vs `57K`), and **`1.64×` faster** on `Q5_K_S` (`83.6K` vs `51.1K`), while `llama.cpp` remains slightly ahead on unquantized `F16` (`55.8K` vs `51.2K`).
 
 ---
 
 ## How to Run
+
+### Discovering Available Quantized Versions (`hubinfo`)
+
+Multi-file GGUF repositories typically publish many quantizations (for example, `second-state/All-MiniLM-L6-v2-Embedding-GGUF` contains 13 `.gguf` files from `Q2_K` to `F16`). When no quantization or file is specified, both `yzma_embedder` and `benchmark_embed` default to `Q4_K_M` (`all-MiniLM-L6-v2-Q4_K_M.gguf`).
+
+To list all files and quantization variants in a HuggingFace repository, install `hubinfo` from `go-huggingface`:
+
+```bash
+go install github.com/gomlx/go-huggingface/cmd/hubinfo@latest
+hubinfo second-state/All-MiniLM-L6-v2-Embedding-GGUF
+```
 
 ### 1. Run `yzma_embedder` (`llama.cpp` via `yzma`)
 
@@ -133,11 +148,21 @@ git clone https://github.com/janpfeifer/yzma_embedder.git
 cd yzma_embedder
 ```
 
+Use **`-quant`** to select a quantization tag case-insensitively (e.g. `-quant=Q4_0`, `-quant=Q4_K_M`, `-quant=Q8_0`, `-quant=F16`) without typing the full `.gguf` filename, or use **`-gguf_file`** to specify an exact `.gguf` filename (mutually exclusive with `-quant`).
+
 - **Default unpadded single-sequence mode across `GOMAXPROCS` embedders (`-bucket=0 -num_embedders=32`, fastest on CPU)**:
   ```bash
+  # Default quantization (Q4_K_M):
   go run . \
     -bucket=0 -num_embedders=32 \
     -model second-state/All-MiniLM-L6-v2-Embedding-GGUF \
+    -limit 1000 -warmup
+
+  # Specific quantization via -quant (e.g. Q4_0):
+  go run . \
+    -bucket=0 -num_embedders=32 \
+    -model second-state/All-MiniLM-L6-v2-Embedding-GGUF \
+    -quant=Q4_0 \
     -limit 1000 -warmup
   ```
 
@@ -166,7 +191,7 @@ cd yzma_embedder
 
 ### 2. Run the GoMLX Baseline (`go-huggingface`)
 
-Requires Go 1.27+ with `GOEXPERIMENT=simd`:
+Requires Go 1.27+ with `GOEXPERIMENT=simd` (use `-gguf_file` to select a specific quantization file, such as `all-MiniLM-L6-v2-Q4_0.gguf`):
 
 - **Unpadded parallel single-sequence mode (`-bucket=0 -num_embedders=32`, fastest on CPU)**:
   ```bash
@@ -174,6 +199,7 @@ Requires Go 1.27+ with `GOEXPERIMENT=simd`:
     go run github.com/gomlx/go-huggingface/examples/msmarco/benchmark_embed@main \
     -bucket=0 -num_embedders=32 \
     -model second-state/All-MiniLM-L6-v2-Embedding-GGUF \
+    -gguf_file=all-MiniLM-L6-v2-Q4_0.gguf \
     -limit 1000 -warmup -dynamic=true
   ```
 
