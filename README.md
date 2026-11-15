@@ -34,16 +34,40 @@ On first run, `yzma_embedder` automatically downloads prebuilt `llama.cpp` share
 
 - **CPU**: AMD Ryzen 9 9950X3D (16 physical cores / 32 threads, Zen 5, AVX-512 VNNI, 3D V-Cache)
 - **OS / Go**: Linux `amd64`, Go `1.27.3` (`GOEXPERIMENT=simd` for GoMLX)
+- **Configuration**: `-bucket=0 -num_embedders=32 -limit 1000 -warmup` across all 13 GGUF quantizations of `second-state/All-MiniLM-L6-v2-Embedding-GGUF` (GoMLX with `GOMLX_BACKEND=go:quantized_cache -dynamic=true`)
 
-| Engine & Configuration | Total Duration | Passages/s | Non-Pad Tokens/s | CPU Time / Passage | `~Cores` | Max RSS Mem |
-| :--- | ---: | ---: | ---: | ---: | ---: | ---: |
-| **GoMLX (`go:quantized_cache`, SIMD, `-bucket=0`, `32` embedders)** | **`2.1s`** | **`4,716 passages/s`** | **`364.7K tokens/s`** | **`6.5ms`** | `30.5` | `449.2 MiB` |
-| **GoMLX (`go` default, SIMD, `-bucket=0`, `32` embedders)** | **`3.5s`** | **`2,877 passages/s`** | **`222.5K tokens/s`** | **`10.6ms`** | `30.6` | `483.3 MiB` |
-| **GoMLX (`go:quantized_cache`, SIMD, `-bucket=8192`, `1` embedder)** | `5.1s` | `1,969 passages/s` | `152.3K tokens/s` | `11.4ms` | `22.5` | `431.3 MiB` |
-| **`yzma` / `llama.cpp` (`-bucket=0`, `32` embedders × `1` thread, SMT)** | **`10.1s`** | **`985 passages/s`** | **`76.3K tokens/s`** | `31.7ms` | `31.3` | `401.7 MiB` |
-| `yzma` / `llama.cpp` (`-bucket=0`, `16` embedders × `1` thread, physical cores) | `11.1s` | `900 passages/s` | `69.7K tokens/s` | `17.8ms` | `16.1` | `258.9 MiB` |
-| `yzma` / `llama.cpp` (`-bucket=8192`, `4` embedders × `4` threads) | `14.8s` | `676 passages/s` | `52.3K tokens/s` | `20.4ms` | `13.8` | `360.5 MiB` |
-| `yzma` / `llama.cpp` (`-bucket=8192`, `1` embedder × `16` threads) | `22.4s` | `447 passages/s` | `34.6K tokens/s` | `25.5ms` | `11.4` | `220.1 MiB` |
+<table>
+  <thead>
+    <tr>
+      <th rowspan="2" align="left">Quantization</th>
+      <th colspan="3" align="center"><code>yzma</code> + <code>llama.cpp</code></th>
+      <th colspan="3" align="center">GoMLX + Go backend (<code>go:quantized_cache</code>)</th>
+    </tr>
+    <tr>
+      <th align="right">Passages/s</th>
+      <th align="right">Tokens/s</th>
+      <th align="right">Max RSS</th>
+      <th align="right">Passages/s</th>
+      <th align="right">Tokens/s</th>
+      <th align="right">Max RSS</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr><td><code>Q2_K</code></td><td align="right">1.5K</td><td align="right">113.1K</td><td align="right">435.6 MiB</td><td align="right">4.3K</td><td align="right">329.7K</td><td align="right">478.5 MiB</td></tr>
+    <tr><td><code>Q3_K_S</code></td><td align="right">1.5K</td><td align="right">112.4K</td><td align="right">386.4 MiB</td><td align="right">4.3K</td><td align="right">329.1K</td><td align="right">482.0 MiB</td></tr>
+    <tr><td><code>Q3_K_M</code></td><td align="right">1.3K</td><td align="right">97.1K</td><td align="right">370.4 MiB</td><td align="right">4.5K</td><td align="right">349.9K</td><td align="right">476.1 MiB</td></tr>
+    <tr><td><code>Q3_K_L</code></td><td align="right">1K</td><td align="right">80.9K</td><td align="right">398.3 MiB</td><td align="right">4.5K</td><td align="right">349.4K</td><td align="right">486.8 MiB</td></tr>
+    <tr><td><code>Q4_0</code></td><td align="right">1.5K</td><td align="right">117.6K</td><td align="right">460.5 MiB</td><td align="right">4.5K</td><td align="right">346.2K</td><td align="right">491.4 MiB</td></tr>
+    <tr><td><code>Q4_K_S</code></td><td align="right">928</td><td align="right">71.8K</td><td align="right">403.5 MiB</td><td align="right">4.5K</td><td align="right">349.6K</td><td align="right">489.4 MiB</td></tr>
+    <tr><td><code>Q4_K_M</code></td><td align="right">987</td><td align="right">76.4K</td><td align="right">415.8 MiB</td><td align="right">4.4K</td><td align="right">342K</td><td align="right">494.7 MiB</td></tr>
+    <tr><td><code>Q5_0</code></td><td align="right">860</td><td align="right">66.6K</td><td align="right">377.9 MiB</td><td align="right">4.5K</td><td align="right">345.7K</td><td align="right">469.1 MiB</td></tr>
+    <tr><td><code>Q5_K_S</code></td><td align="right">554</td><td align="right">42.9K</td><td align="right">395.9 MiB</td><td align="right">4.5K</td><td align="right">348.7K</td><td align="right">485.4 MiB</td></tr>
+    <tr><td><code>Q5_K_M</code></td><td align="right">564</td><td align="right">43.7K</td><td align="right">412.2 MiB</td><td align="right">4.4K</td><td align="right">343.4K</td><td align="right">491.9 MiB</td></tr>
+    <tr><td><code>Q6_K</code></td><td align="right">1.1K</td><td align="right">85.9K</td><td align="right">399.7 MiB</td><td align="right">4.2K</td><td align="right">328.2K</td><td align="right">499.0 MiB</td></tr>
+    <tr><td><code>Q8_0</code></td><td align="right">1K</td><td align="right">79.4K</td><td align="right">387.7 MiB</td><td align="right">4.5K</td><td align="right">345.6K</td><td align="right">494.1 MiB</td></tr>
+    <tr><td><code>F16</code></td><td align="right">736</td><td align="right">56.9K</td><td align="right">441.1 MiB</td><td align="right">1.9K</td><td align="right">145.4K</td><td align="right">648.9 MiB</td></tr>
+  </tbody>
+</table>
 
 ### 2. Apple Mac mini M6 (macOS `arm64`, 12 Cores)
 
@@ -146,7 +170,8 @@ Requires Go 1.27+ with `GOEXPERIMENT=simd`:
 | Flag | Default | Description |
 | :--- | :--- | :--- |
 | `-model` | `second-state/All-MiniLM-L6-v2-Embedding-GGUF` | HuggingFace GGUF repository ID or path to a local `.gguf` file. |
-| `-gguf_file` | `""` | Specific `.gguf` filename in multi-file GGUF repos (auto-selects `Q4_K_M`, etc. when empty). |
+| `-gguf_file` | `""` | Specific `.gguf` filename in multi-file GGUF repos (auto-selects `Q4_K_M`, etc. when both `-gguf_file` and `-quant` are empty). Mutually exclusive with `-quant`. |
+| `-quant` | `""` | GGUF quantization version/tag to select in multi-file GGUF repos (e.g., `Q4_0`, `Q4_K_M`, `Q8_0`, `F16`; case-insensitive). Mutually exclusive with `-gguf_file`. |
 | `-limit` | `-1` | Number of MS MARCO queries to process (`<= 0` processes all ~808K queries). |
 | `-msmarco_split` | `train` | MS MARCO v2.1 split (`train`, `validation`, `test`). |
 | `-bucket` | `0` | Token budget (`<= 0` uses `bucket.Unpadded()` single-sequence mode; `> 0` uses two-bit token-budget bucketing). |

@@ -44,6 +44,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"runtime/pprof"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -73,7 +74,10 @@ var (
 		fmt.Sprintf("HuggingFace GGUF model repository or local .gguf path. Example: %q", minilmgguf.Repository))
 	flagGGUFFile = flag.String("gguf_file", "",
 		"Specific .gguf filename to load when -model is a multi-file GGUF repository. "+
-			"When empty, selects by community preference order (Q4_K_M, Q4_K_S, ...).")
+			"When both -gguf_file and -quant are empty, selects by community preference order (Q4_K_M, Q4_K_S, ...).")
+	flagQuant = flag.String("quant", "",
+		"GGUF quantization version/tag to select when -model is a multi-file GGUF repository "+
+			"(e.g. 'Q4_0', 'Q4_K_M', 'Q8_0', 'F16'; case-insensitive). Mutually exclusive with -gguf_file.")
 	flagLimit        = flag.Int("limit", -1, "Limit the number of queries indexed. Set <= 0 to use all.")
 	flagMSMarcoSplit = flag.String("msmarco_split", msmarco.TrainSplit, "Split to read from MS MARCO dataset (e.g. 'train', 'validation', 'test')")
 	flagBucketBudget = flag.Int("bucket", 0,
@@ -125,8 +129,14 @@ type resolvedModel struct {
 	normalize   bool
 }
 
-func resolveModelAndTokenizer(modelSpec, ggufFile string) *resolvedModel {
+func resolveModelAndTokenizer(modelSpec, ggufFile, quant string) *resolvedModel {
+	if ggufFile != "" && quant != "" {
+		klog.Fatalf("Cannot specify both -gguf_file (%q) and -quant (%q)", ggufFile, quant)
+	}
 	if info, err := os.Stat(modelSpec); err == nil && !info.IsDir() && strings.HasSuffix(strings.ToLower(modelSpec), ".gguf") {
+		if ggufFile != "" || quant != "" {
+			klog.Warningf("-gguf_file/-quant ignored for local GGUF file %q", modelSpec)
+		}
 		f := mustRunWithElapsedTime("Parsing local GGUF header", func() (*gguf.File, error) {
 			return gguf.Open(modelSpec)
 		})
@@ -155,11 +165,17 @@ func resolveModelAndTokenizer(modelSpec, ggufFile string) *resolvedModel {
 		}
 		if ggufFile != "" {
 			m.WithGGUFFile(ggufFile)
+		} else if quant != "" {
+			selected, err := selectGGUFFileByQuant(m.GGUFFiles(), quant)
+			if err != nil {
+				return nil, fmt.Errorf("repository %q: %w", modelSpec, err)
+			}
+			m.WithGGUFFile(selected)
 		}
 		return m, nil
 	})
 	if !hfModel.IsGGUF() {
-		klog.Fatalf("Repository %q does not select a GGUF file (use a GGUF repo or specify -gguf_file)", modelSpec)
+		klog.Fatalf("Repository %q does not select a GGUF file (use a GGUF repo or specify -gguf_file / -quant)", modelSpec)
 	}
 	fmt.Printf("- GGUF file: %s\n", hfModel.GGUFFile())
 
@@ -178,6 +194,83 @@ func resolveModelAndTokenizer(modelSpec, ggufFile string) *resolvedModel {
 		poolingType: poolingFromHFModel(hfModel),
 		normalize:   shouldNormalizeHFModel(hfModel),
 	}
+}
+
+// selectGGUFFileByQuant picks the .gguf filename in files matching the requested quantization tag
+// (e.g. "Q4_0", "Q4_K_M", "F16"), excluding auxiliary mmproj files unless no other match exists.
+func selectGGUFFileByQuant(files []string, quant string) (string, error) {
+	if len(files) == 0 {
+		return "", fmt.Errorf("no .gguf files found")
+	}
+	tag := strings.TrimSpace(quant)
+	if strings.HasSuffix(strings.ToLower(tag), ".gguf") {
+		tag = tag[:len(tag)-len(".gguf")]
+	}
+	if tag == "" {
+		return "", fmt.Errorf("empty quantization tag %q", quant)
+	}
+
+	nonMMProj := make([]string, 0, len(files))
+	mmProj := make([]string, 0)
+	for _, f := range files {
+		if strings.HasPrefix(strings.ToLower(filepath.Base(f)), "mmproj") {
+			mmProj = append(mmProj, f)
+		} else {
+			nonMMProj = append(nonMMProj, f)
+		}
+	}
+
+	for _, pool := range [][]string{nonMMProj, mmProj} {
+		var matches []string
+		for _, f := range pool {
+			if matchesGGUFQuantTag(filepath.Base(f), tag) {
+				matches = append(matches, f)
+			}
+		}
+		if len(matches) == 0 {
+			for _, f := range pool {
+				if matchesGGUFQuantTag(f, tag) {
+					matches = append(matches, f)
+				}
+			}
+		}
+		if len(matches) > 0 {
+			slices.Sort(matches)
+			return matches[0], nil
+		}
+	}
+
+	return "", fmt.Errorf("no .gguf file matching quantization %q (available: %s)", quant, strings.Join(files, ", "))
+}
+
+// matchesGGUFQuantTag checks whether s carries tag as a delimited token (ignoring any trailing ".gguf").
+func matchesGGUFQuantTag(s, tag string) bool {
+	if strings.HasSuffix(strings.ToLower(s), ".gguf") {
+		s = s[:len(s)-len(".gguf")]
+	}
+	upper := strings.ToUpper(s)
+	tag = strings.ToUpper(tag)
+
+	isDelim := func(b byte) bool {
+		return b == '-' || b == '.' || b == '_' || b == '/' || b == '\\'
+	}
+
+	searchFrom := 0
+	for searchFrom <= len(upper)-len(tag) {
+		idx := strings.Index(upper[searchFrom:], tag)
+		if idx < 0 {
+			return false
+		}
+		pos := searchFrom + idx
+		end := pos + len(tag)
+		leftOK := pos == 0 || isDelim(upper[pos-1])
+		rightOK := end == len(upper) || isDelim(upper[end])
+		if leftOK && rightOK {
+			return true
+		}
+		searchFrom = pos + 1
+	}
+	return false
 }
 
 func poolingFromGGUFHeader(f *gguf.File) (llama.PoolingType, bool) {
@@ -612,7 +705,7 @@ func main() {
 		}()
 	}
 
-	resolved := resolveModelAndTokenizer(*flagModel, *flagGGUFFile)
+	resolved := resolveModelAndTokenizer(*flagModel, *flagGGUFFile, *flagQuant)
 
 	mustRunWithElapsedTime("Initializing llama.cpp runtime", func() (any, error) {
 		ensureLlamaLoaded(*flagLibDir, *flagProcessor, *flagVerbose)
@@ -630,6 +723,7 @@ func main() {
 		return m, nil
 	})
 	defer llama.ModelFree(llamaModel)
+	fmt.Printf("- Loaded GGUF model: %s (%s)\n", llama.ModelDesc(llamaModel), humanize.Bytes(int64(llama.ModelSize(llamaModel))))
 
 	padID := 0
 	if id, err := resolved.tokenizer.SpecialTokenID(tapi.TokPad); err == nil {
