@@ -73,17 +73,40 @@ On first run, `yzma_embedder` automatically downloads prebuilt `llama.cpp` share
 
 - **CPU**: Apple M6 (12 cores total: 2 Super, 4 Performance, 6 Efficiency; ARMv9.2-A with NEON `USDOT` / `I8MM` and SME2)
 - **OS / Go**: macOS `darwin/arm64`, Go `1.27.3` (`GOEXPERIMENT=simd` for GoMLX; activates NEON + SME2 kernels)
+- **Configuration**: `-bucket=0 -num_embedders=12 -limit 1000 -warmup` across all 13 GGUF quantizations of `second-state/All-MiniLM-L6-v2-Embedding-GGUF` (GoMLX with `GOMLX_BACKEND=go:quantized_cache -dynamic=true`)
 
-| Engine & Configuration | Total Duration | Passages/s | Non-Pad Tokens/s | CPU Time / Passage | `~Cores` | Max RSS Mem |
-| :--- | ---: | ---: | ---: | ---: | ---: | ---: |
-| **GoMLX (`go:quantized_cache`, SIMD/NEON/SME2, `-bucket=0`, `12` embedders)** | **`9.0s`** | **`1,117 passages/s`** | **`86.4K tokens/s`** | **`10.6ms`** | `11.8` | `373.3 MiB` |
-| **GoMLX (`go` default, SIMD/NEON/SME2, `-bucket=0`, `12` embedders)** | **`10.5s`** | **`951 passages/s`** | **`73.6K tokens/s`** | **`12.4ms`** | `11.8` | `377.3 MiB` |
-| **GoMLX (`go:quantized_cache`, SIMD/NEON/SME2, `-bucket=8192`, `1` embedder)** | `12.2s` | `816 passages/s` | `63.2K tokens/s` | `14.0ms` | `11.4` | `418.4 MiB` |
-| **`yzma` / `llama.cpp` (`-bucket=0`, `12` embedders × `1` thread, all cores)** | **`12.9s`** | **`775 passages/s`** | **`60.0K tokens/s`** | `15.1ms` | `11.7` | `395.6 MiB` |
-| `yzma` / `llama.cpp` (`-bucket=8192`, `4` embedders × `3` threads) | `14.8s` | `675 passages/s` | `52.2K tokens/s` | `13.8ms` | `9.3` | `478.5 MiB` |
-| `yzma` / `llama.cpp` (`-bucket=0`, `6` embedders × `1` thread, Super + Perf cores) | `17.7s` | `565 passages/s` | `43.7K tokens/s` | `11.1ms` | `6.3` | `350.5 MiB` |
-| `yzma` / `llama.cpp` (`-bucket=8192`, `1` embedder × `6` threads, Super + Perf cores) | `26.5s` | `377 passages/s` | `29.1K tokens/s` | `10.9ms` | `4.1` | `275.3 MiB` |
-| `yzma` / `llama.cpp` (`-bucket=8192`, `1` embedder × `12` threads, all cores) | `28.4s` | `352 passages/s` | `27.2K tokens/s` | `19.5ms` | `6.8` | `292.3 MiB` |
+<table>
+  <thead>
+    <tr>
+      <th rowspan="2" align="left">Quantization</th>
+      <th colspan="3" align="center"><code>yzma</code> + <code>llama.cpp</code></th>
+      <th colspan="3" align="center">GoMLX + Go backend (<code>go:quantized_cache</code>)</th>
+    </tr>
+    <tr>
+      <th align="right">Passages/s</th>
+      <th align="right">Tokens/s</th>
+      <th align="right">Max RSS</th>
+      <th align="right">Passages/s</th>
+      <th align="right">Tokens/s</th>
+      <th align="right">Max RSS</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr><td><code>Q2_K</code></td><td align="right">867</td><td align="right">67.1K</td><td align="right">388.6 MiB</td><td align="right">1K</td><td align="right">79.8K</td><td align="right">387.9 MiB</td></tr>
+    <tr><td><code>Q3_K_S</code></td><td align="right">859</td><td align="right">66.5K</td><td align="right">384.3 MiB</td><td align="right">1K</td><td align="right">79.3K</td><td align="right">397.1 MiB</td></tr>
+    <tr><td><code>Q3_K_M</code></td><td align="right">759</td><td align="right">58.8K</td><td align="right">427.0 MiB</td><td align="right">1.1K</td><td align="right">88K</td><td align="right">390.3 MiB</td></tr>
+    <tr><td><code>Q3_K_L</code></td><td align="right">701</td><td align="right">54.3K</td><td align="right">361.6 MiB</td><td align="right">1.1K</td><td align="right">87.5K</td><td align="right">387.9 MiB</td></tr>
+    <tr><td><code>Q4_0</code></td><td align="right">951</td><td align="right">73.6K</td><td align="right">372.6 MiB</td><td align="right">1.1K</td><td align="right">87.7K</td><td align="right">397.5 MiB</td></tr>
+    <tr><td><code>Q4_K_S</code></td><td align="right">744</td><td align="right">57.6K</td><td align="right">391.3 MiB</td><td align="right">1.1K</td><td align="right">87.4K</td><td align="right">382.8 MiB</td></tr>
+    <tr><td><code>Q4_K_M</code></td><td align="right">737</td><td align="right">57K</td><td align="right">389.9 MiB</td><td align="right">1.1K</td><td align="right">82K</td><td align="right">396.9 MiB</td></tr>
+    <tr><td><code>Q5_0</code></td><td align="right">718</td><td align="right">55.6K</td><td align="right">410.9 MiB</td><td align="right">1.1K</td><td align="right">84.6K</td><td align="right">397.0 MiB</td></tr>
+    <tr><td><code>Q5_K_S</code></td><td align="right">660</td><td align="right">51.1K</td><td align="right">366.7 MiB</td><td align="right">1.1K</td><td align="right">83.6K</td><td align="right">392.1 MiB</td></tr>
+    <tr><td><code>Q5_K_M</code></td><td align="right">661</td><td align="right">51.2K</td><td align="right">369.8 MiB</td><td align="right">1K</td><td align="right">79.6K</td><td align="right">398.9 MiB</td></tr>
+    <tr><td><code>Q6_K</code></td><td align="right">683</td><td align="right">52.9K</td><td align="right">372.8 MiB</td><td align="right">956</td><td align="right">74K</td><td align="right">396.8 MiB</td></tr>
+    <tr><td><code>Q8_0</code></td><td align="right">836</td><td align="right">64.7K</td><td align="right">347.7 MiB</td><td align="right">1K</td><td align="right">81.1K</td><td align="right">390.4 MiB</td></tr>
+    <tr><td><code>F16</code></td><td align="right">722</td><td align="right">55.8K</td><td align="right">406.1 MiB</td><td align="right">661</td><td align="right">51.2K</td><td align="right">569.6 MiB</td></tr>
+  </tbody>
+</table>
 
 > **Note on Apple M6 3-tier core topology (`Super` / `Performance` / `Efficiency`) in `llama.cpp`:** On macOS, `llama.cpp`'s default thread detection queries `hw.perflevel0.physicalcpu` (which reports only the `2` Super cores on M6, ignoring the `4` Performance and `6` Efficiency cores). In single-sequence mode (`-bucket=0 -num_embedders=12`), each worker explicitly runs with `1` thread so all 12 cores are saturated (`~11.7` cores). In bucketed mode (`-bucket=8192`), pass `-threads=3` (for `-num_embedders=4`) or `-threads=6` / `-threads=12` (for `-num_embedders=1`) to use more than 2 threads.
 
